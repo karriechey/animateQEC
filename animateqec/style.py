@@ -15,8 +15,15 @@ EVENT = "#FFE066"  # fired detector
 MWPM = "#FF4FD8"  # magenta: used for nothing else, stays visible on X plaquettes
 MWPM_WIDTH = 6
 
-# Inter (SIL OFL); Pango falls back to the system sans font if it is not installed
-FONT = "Inter, sans-serif"
+# CMU Serif (SIL OFL), the Computer Modern of the LaTeX math; Pango falls back to the system serif
+FONT = "CMU Serif, serif"
 TITLE_SIZE = 40
 CAPTION_SIZE = 26
 SMALL_SIZE = 20
+
+# diverging hidden-state colormap, centred at 0 on the background
+STATE_NEG = "#6C8EBF"
+STATE_POS = "#E8A07A"
+# truth classes in state-space plots
+FLIP = "#E07A5F"
+NO_FLIP = "#81B29A"

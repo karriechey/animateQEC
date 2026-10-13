@@ -11,4 +11,4 @@ camera:
 tex:
   template: "basic"
 text:
-  font: "Inter, sans-serif"
+  font: "CMU Serif, serif"

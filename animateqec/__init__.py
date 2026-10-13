@@ -5,7 +5,8 @@ from manimlib import *
 
 from .style import *
 from .lattice import SurfaceCodeLattice
-from .nn import DetectorVector, GRUCell, HeadBox, PFlipGauge, caption, flow_arrow, pulse_along
+from .nn import (DetectorVector, GRUCell, HeadBox, PFlipGauge, StateHeatmap, caption,
+                 diverging_color, flow_arrow, pulse_along)
 
 StepBits = namedtuple("StepBits", "n_bits fired present")
 

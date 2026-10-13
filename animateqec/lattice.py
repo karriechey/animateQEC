@@ -90,14 +90,21 @@ class SurfaceCodeLattice(VGroup):
         return glows
 
     def matching_edges(self, edges, color=MWPM, width=MWPM_WIDTH):
-        """Thick dashed lines for matched detector pairs; -1 means the boundary.
+        """Thick dashed lines for matched detector pairs, projected onto the lattice.
 
-        A boundary edge runs from the detector to the nearest point on the lattice edge.
+        A boundary edge (-1) runs to the detector's boundary data qubit: one in its own
+        check's support that no other check of the same basis covers. Pairs at the same
+        (x, y) in different rounds (time-like edges) have no length here and are skipped;
+        their count is kept in .n_timelike.
         """
-        lines = VGroup()
-        data = np.array([q["xy"] for q in self.viz["qubits"]["data"]])
-        lo, hi = data.min(0) - 1, data.max(0) + 1
         det = self.viz["detectors"]
+        covered = Counter()
+        for s in self.viz["stabilizers"]:
+            for q in s["data"]:
+                covered[(s["basis"], q)] += 1
+        stab_of = {s["ancilla"]: s for s in self.viz["stabilizers"]}
+        lines = VGroup()
+        lines.n_timelike = 0
         for a, b in edges:
             if a < 0:
                 a, b = b, a
@@ -105,11 +112,12 @@ class SurfaceCodeLattice(VGroup):
             if b >= 0:
                 pb = np.array([det[b]["x"], det[b]["y"]])
             else:
-                gaps = [pa[0] - lo[0], hi[0] - pa[0], pa[1] - lo[1], hi[1] - pa[1]]
-                k = int(np.argmin(gaps))
-                pb = pa.copy()
-                pb[k // 2] = (lo, hi)[k % 2][k // 2]
+                s = stab_of[det[a]["ancilla"]]
+                ends = [q for q in s["data"] if covered[(s["basis"], q)] == 1] or s["data"]
+                pb = np.array(min((self.qubit_xy[q] for q in ends),
+                                  key=lambda xy: np.linalg.norm(np.array(xy) - pa)))
             if np.allclose(pa, pb):
+                lines.n_timelike += 1
                 continue
             lines.add(DashedLine(self.to_point(pa), self.to_point(pb), dash_length=0.12)
                       .set_stroke(color, width))

@@ -26,6 +26,11 @@ def hud_text(text, size=CAPTION_SIZE, color=FG):
     return caption(text, size, color).fix_in_frame()
 
 
+def hud_math(text, size=CAPTION_SIZE, color=FG):
+    """Caption with inline $math$, set by LaTeX; CMU Serif lacks most Unicode subscripts."""
+    return TexText(text, font_size=size, color=color).fix_in_frame()
+
+
 def backed(m, opacity=0.85):
     """Caption on a dark panel, for text drawn over a busy lattice."""
     bg = BackgroundRectangle(m, fill_color=BG, fill_opacity=opacity, buff=0.12)
@@ -153,10 +158,9 @@ class FlattenToVectors(Scene):
         det = VIZ["detectors"]
         xs = np.linspace(-5.6, 5.6, len(STEPS))
         vecs = VGroup(*(input_vector(t).move_to([x, VEC_Y - 0.1, 0]) for t, x in zip(STEPS, xs)))
-        cap1 = hud_text(f"each round becomes one {N_SLOTS}-slot vector xₜ").to_edge(UP)
+        cap1 = hud_math(f"each round becomes one {N_SLOTS}-slot vector $x_t$").to_edge(UP)
         n_edge = len(VIZ["rounds"][str(STEPS[0])])
-        sub = str.maketrans("0123456789", "₀₁₂₃₄₅₆₇₈₉")
-        cap2 = hud_text(f"x₀ and x{str(STEPS[-1]).translate(sub)}: only the {n_edge} Z checks are measured "
+        cap2 = hud_math(f"$x_0$ and $x_{{{STEPS[-1]}}}$: only the {n_edge} Z checks are measured "
                         "(hollow slots stay zero)", SMALL_SIZE, MUTED).next_to(cap1, DOWN)
 
         moves = []
@@ -371,8 +375,8 @@ class DetectorRegion(Scene):
                 n_cx += 1
             text = ", ".join(OP_NAMES.get(o, o) + (f" {n_cx}" if o == "CX" else "") for o in r["ops"])
             if r["tick"] in mr_ticks:
-                text = "measure: m₀ recorded; region now sits on the full plaquette"
-            new_lbl = backed(hud_text(f"tick {r['tick']}: {text or 'idle'}", CAPTION_SIZE))
+                text = "measure: $m_0$ recorded; region now sits on the full plaquette"
+            new_lbl = backed(hud_math(f"tick {r['tick']}: {text or 'idle'}", CAPTION_SIZE))
             new_lbl.move_to(tick_lbl)
             new_shape = lat.region_shape(r["qubits"].keys(), Z_CHECK)
             anims = [FadeTransform(tick_lbl, new_lbl)]
@@ -382,12 +386,324 @@ class DetectorRegion(Scene):
             tick_lbl, shape = new_lbl, new_shape
 
         end = r["tick"] + 1
-        final = backed(VGroup(
-            hud_text(f"tick {end}: measure: m₁ recorded; detector =", CAPTION_SIZE),
-            Tex(r"m_0 \oplus m_1", font_size=34, color=FG).fix_in_frame(),
-        ).arrange(RIGHT, buff=0.15))
+        final = backed(hud_math(f"tick {end}: measure: $m_1$ recorded; "
+                                r"detector $= m_0 \oplus m_1$", CAPTION_SIZE))
         final.move_to(tick_lbl)
         glow = lat.event_glows([det_i])
         self.play(FadeTransform(tick_lbl, final), ShrinkToCenter(shape), run_time=0.6)
         self.play(GrowFromCenter(glow), run_time=0.5)
         self.wait(1.5)
+
+
+# ---- RealShot: one real eval-block shot through the trained f3280 checkpoint ------------
+TRACE = load_viz(DATA / "shot_trace.json")
+RS = TRACE["shots"][0]
+RS_META = TRACE["meta"]
+assert (RS_META["d"], RS_META["rounds"], RS_META["p"]) == (D, VIZ["meta"]["rounds"], VIZ["meta"]["p"])
+RUN_LABEL = "f3280"  # run name in GRU_all_runs (three GRU layers of 280, fresh shots)
+RS_XS = np.linspace(-5.0, 6.2, len(STEPS))
+RS_VEC_Y, RS_ROWS = -2.9, [-1.3, 0.05, 1.4]
+RS_CELL = (1.1, 0.8)
+
+
+def rs_events(t):
+    return RS["events_by_round"].get(str(t), [])
+
+
+class RealShot(Scene):
+    def construct(self):
+        n_layers = len(RS["hidden"])
+        title = hud_text("One real shot, behind the scenes", TITLE_SIZE).to_corner(UL)
+        assert not RS_META["held_out_test_set"] and RS["mwpm_pred"] != RS["truth"]
+        tag = hud_text(f"shot #{RS['pool_shot']} · {RS['block']} block (not the held-out test set) · "
+                       f"{RUN_LABEL}, epoch {RS_META['best']['best_epoch']}",
+                       SMALL_SIZE, MUTED).to_corner(DR)
+        picked = hud_text("selected as a shot where MWPM fails", CAPTION_SIZE, MUTED)
+        picked.next_to(title, DOWN, aligned_edge=LEFT)
+        self.play(FadeIn(title), FadeIn(tag), FadeIn(picked))
+
+        # 1. the shot's real detection events, round by round
+        lat = SurfaceCodeLattice(VIZ, height=LAT_H).shift(DOWN * 0.3)
+        counter = VGroup(Tex("t =", font_size=40), Integer(0, font_size=40)).arrange(RIGHT, buff=0.15)
+        counter.fix_in_frame().next_to(lat, RIGHT, buff=0.8).align_to(lat, UP)
+        self.play(FadeIn(lat), FadeIn(counter), run_time=1)
+        for t in STEPS:
+            glows = lat.event_glows(rs_events(t))
+            self.play(counter[1].animate.set_value(t), run_time=0.15)
+            if len(glows):
+                self.play(LaggedStartMap(GrowFromCenter, glows, lag_ratio=0.1), run_time=0.4)
+                self.wait(0.2)
+                self.play(FadeOut(glows), run_time=0.2)
+            else:
+                self.wait(0.3)
+        self.play(FadeOut(lat), FadeOut(counter), FadeOut(picked), run_time=0.6)
+
+        # 2. the real hidden states, step by step
+        vecs = VGroup()
+        for t, x in zip(STEPS, RS_XS):
+            bits = step_bits(VIZ, {"events_by_round": RS["events_by_round"]}, t)
+            v = DetectorVector(N_SLOTS, bits.fired, f"x_{{{t}}}", present=bits.present, height=1.4)
+            vecs.add(v.shift([x, RS_VEC_Y, 0] - v.cells.get_center()))
+        labels = VGroup(*(caption(f"layer {l + 1}", SMALL_SIZE, LAYER_COLORS[l])
+                          .move_to([RS_XS[0] - 1.2, y, 0]) for l, y in enumerate(RS_ROWS)))
+        cells, ups, sides = [], [], []
+        for l, y in enumerate(RS_ROWS):
+            row_cells, row_ups, row_sides = VGroup(), VGroup(), VGroup()
+            for k, x in enumerate(RS_XS):
+                box = RoundedRectangle(width=RS_CELL[0], height=RS_CELL[1], corner_radius=0.08)
+                box.set_stroke(LAYER_COLORS[l], 2).set_fill(BG, 1).move_to([x, y, 0])
+                heat = StateHeatmap(RS["hidden"][l][k]).move_to(box)
+                row_cells.add(VGroup(box, heat))
+                below = vecs[k].cells if l == 0 else cells[l - 1][k]
+                row_ups.add(flow_arrow(below.get_top(), box.get_bottom(),
+                                       FG if l == 0 else LAYER_COLORS[l - 1], thickness=2))
+                if k:
+                    row_sides.add(Line(row_cells[k - 1].get_right(), box.get_left())
+                                  .set_stroke(LAYER_COLORS[l], 2))
+            cells.append(row_cells), ups.append(row_ups), sides.append(row_sides)
+        note = hud_text("real hidden states of the trained model: 280 values per layer, "
+                        "shown as 14 × 20", SMALL_SIZE, MUTED).next_to(title, DOWN, aligned_edge=LEFT)
+        scale = self.state_scale().next_to(note, DOWN, buff=0.15, aligned_edge=LEFT)
+        self.play(FadeOut(tag), LaggedStartMap(FadeIn, vecs, lag_ratio=0.05), FadeIn(labels),
+                  FadeIn(scale), FadeIn(note), run_time=1.2)
+        for k in range(len(STEPS)):
+            anims = []
+            for l in range(n_layers):
+                a = [GrowArrow(ups[l][k]), FadeIn(cells[l][k])]
+                if k:
+                    a.append(ShowCreation(sides[l][k - 1]))
+                anims.append(AnimationGroup(*a))
+            self.play(Indicate(vecs[k].cells, color=EVENT, scale_factor=1.05),
+                      LaggedStart(*anims, lag_ratio=0.45), run_time=0.9)
+        last = cells[-1][-1]
+        head = HeadBox().scale(0.8).next_to(last, UP, buff=0.4)
+        head_arrow = flow_arrow(last.get_top(), head.get_bottom(), LAYER_COLORS[n_layers - 1])
+        gauge = PFlipGauge(width=1.8).scale(0.8).next_to(head, UP, buff=0.25)
+        gauge.to_edge(RIGHT, buff=0.3)
+        self.play(GrowArrow(head_arrow), FadeIn(head), FadeIn(gauge), run_time=0.6)
+        self.play(gauge.fill_to(RS["p_flip"], run_time=1.2))
+        self.wait(1)
+        network = VGroup(vecs, labels, *cells, *ups, *sides, head, head_arrow, scale, note)
+        self.play(FadeOut(network), FadeOut(gauge), run_time=0.8)
+
+        # 3. the path through state space (PCA fit on 2,000 other eval-block shots)
+        self.state_space()
+
+        # 4. the verdict on the lattice
+        self.verdict()
+
+    def state_scale(self):
+        n = 21
+        bar = VGroup(*(Square(0.12).set_stroke(width=0).set_fill(diverging_color(v), 1)
+                       for v in np.linspace(-1, 1, n))).arrange(RIGHT, buff=0)
+        lo = Tex("-1", font_size=24, color=FG).next_to(bar, LEFT, buff=0.1)
+        hi = Tex("+1", font_size=24, color=FG).next_to(bar, RIGHT, buff=0.1)
+        lbl = caption("hidden-state value (fixed scale)", SMALL_SIZE, MUTED).next_to(bar, UP, buff=0.1)
+        return VGroup(bar, lo, hi, lbl).fix_in_frame()
+
+    def pca_panel(self, pc, size, color, show_cloud_legend=False):
+        var = pc["explained_variance_ratio"]
+        cloud = np.array(pc["cloud_final"])
+        path = np.array(pc["trajectories"][str(RS["pool_shot"])])
+        pts = np.vstack([cloud, path])
+        lo, hi = pts.min(0), pts.max(0)
+        pad = 0.08 * (hi - lo)
+        axes = Axes(x_range=[lo[0] - pad[0], hi[0] + pad[0]], y_range=[lo[1] - pad[1], hi[1] + pad[1]],
+                    width=size, height=size, axis_config=dict(include_ticks=False, stroke_color=MUTED,
+                                                               stroke_width=1.5))
+        xl = caption(f"PC1 ({100 * var[0]:.0f}%)", SMALL_SIZE, MUTED).next_to(axes, DOWN, buff=0.1)
+        yl = caption(f"PC2 ({100 * var[1]:.0f}%)", SMALL_SIZE, MUTED).rotate(PI / 2)
+        yl.next_to(axes, LEFT, buff=0.1)
+        dots = VGroup(*(Dot(axes.c2p(*c), radius=0.022 * size / 5,
+                            fill_color=FLIP if f else NO_FLIP, fill_opacity=0.45)
+                        for c, f in zip(cloud, pc["cloud_truth"])))
+        steps = VGroup(*(Dot(axes.c2p(*c), radius=0.05 * size / 5, fill_color=color)
+                         .set_stroke(FG, 1) for c in path))
+        segs = VGroup(*(Line(axes.c2p(*a), axes.c2p(*b)).set_stroke(color, 3)
+                        for a, b in zip(path[:-1], path[1:])))
+        return VGroup(axes, xl, yl), dots, steps, segs
+
+    def state_space(self):
+        pcs = TRACE["pca"]
+        main_frame, main_cloud, main_steps, main_segs = self.pca_panel(pcs[-1], 5.4, LAYER_COLORS[len(pcs) - 1])
+        VGroup(main_frame, main_cloud, main_steps, main_segs).move_to(LEFT * 1.6 + DOWN * 0.5)
+        head = hud_text(f"layer {len(pcs)} state, step by step, in 2-D (PCA)", CAPTION_SIZE,
+                        LAYER_COLORS[len(pcs) - 1])
+        head.next_to(main_frame, UP, buff=0.25)
+        legend = VGroup(*(VGroup(Dot(radius=0.06, fill_color=c), caption(s, SMALL_SIZE))
+                          .arrange(RIGHT, buff=0.15)
+                          for c, s in ((FLIP, "final state of another shot: truth flip"),
+                                       (NO_FLIP, "final state of another shot: truth no flip"))))
+        legend.arrange(DOWN, aligned_edge=LEFT, buff=0.15)
+        n = len(pcs[-1]["cloud_truth"])
+        fit = caption(f"PCA fit on {n:,} other evaluation-block shots", SMALL_SIZE, MUTED)
+        side = VGroup(legend, fit).arrange(DOWN, aligned_edge=LEFT, buff=0.3)
+        side.next_to(main_frame, RIGHT, buff=0.6).align_to(main_frame, UP)
+        self.play(FadeIn(main_frame), FadeIn(head), FadeIn(main_cloud, lag_ratio=0.002),
+                  FadeIn(side), run_time=1.5)
+        for k in range(len(main_steps)):
+            anims = [GrowFromCenter(main_steps[k])]
+            if k:
+                anims.append(ShowCreation(main_segs[k - 1]))
+            self.play(*anims, run_time=0.3)
+        lab = caption(f"t = {STEPS[-1]}", SMALL_SIZE, FG).next_to(main_steps[-1], UR, buff=0.05)
+        truth = "flip" if RS["truth"] else "no flip"
+        end_cap = caption(f"it ends among shots whose truth is {truth}", CAPTION_SIZE)
+        end_cap.next_to(fit, DOWN, buff=0.5, aligned_edge=LEFT)
+        self.play(FadeIn(lab), FadeIn(end_cap), Flash(main_steps[-1], color=FG))
+        self.wait(1)
+
+        small = VGroup()
+        for l, pc in enumerate(pcs[:-1]):
+            fr, cl, st, sg = self.pca_panel(pc, 1.9, LAYER_COLORS[l])
+            p = VGroup(fr, cl, sg, st)
+            p.add(caption(f"layer {l + 1}", SMALL_SIZE, LAYER_COLORS[l]).next_to(fr, UP, buff=0.08))
+            small.add(p)
+        small.arrange(RIGHT, buff=0.6).next_to(end_cap, DOWN, buff=0.5, aligned_edge=LEFT)
+        pct = " / ".join(f"{100 * sum(pc['explained_variance_ratio']):.0f}%" for pc in pcs[:-1])
+        weak = caption(f"layers 1–{len(pcs) - 1}: two PCs explain only {pct};\nlittle structure visible",
+                       SMALL_SIZE, MUTED).next_to(small, DOWN, buff=0.2, aligned_edge=LEFT)
+        self.play(FadeIn(small), FadeIn(weak), run_time=1)
+        self.wait(1.5)
+        self.play(*(FadeOut(m) for m in self.mobjects if not getattr(m, "fixed_in_frame", False)
+                    or m in (head, legend, fit, end_cap, weak)), run_time=0.8)
+        self.play(FadeOut(VGroup(head, side, end_cap, weak, lab)), run_time=0.1)
+
+    def verdict(self):
+        lat = SurfaceCodeLattice(VIZ, height=LAT_H).to_edge(LEFT, buff=0.8).shift(DOWN * 0.3)
+        all_events = [i for t in STEPS for i in rs_events(t)]
+        glows = lat.event_glows(all_events)
+        ev_cap = caption(f"all {RS['n_events']} detection events; rings mark a check\n"
+                         "that fired in more than one round", SMALL_SIZE, MUTED)
+        ev_cap.next_to(lat, DOWN, buff=0.15)
+        self.play(FadeIn(lat), FadeIn(glows), FadeIn(ev_cap), run_time=1)
+
+        col_x = lat.get_right()[0] + 0.8
+        say = lambda name, flip: f"{name}: {'flip' if flip else 'no flip'}"
+        gru_l = caption(f"GRU: P(flip) = {RS['p_flip']:.3f}  →  {'flip' if RS['gru_pred'] else 'no flip'}",
+                        CAPTION_SIZE, LAYER_COLORS[len(RS['hidden']) - 1])
+        gru_l.move_to([0, 1.6, 0]).align_to([col_x, 0, 0], LEFT)
+        self.play(FadeIn(gru_l), run_time=0.6)
+
+        chains = lat.matching_edges(RS["mwpm_edges"])
+        mwpm_l = caption(say("MWPM", RS["mwpm_pred"]), CAPTION_SIZE, MWPM)
+        mwpm_l.next_to(gru_l, DOWN, buff=0.45, aligned_edge=LEFT)
+        mwpm_note = caption(f"MWPM matching (dashed); {chains.n_timelike} time-like matches\n"
+                            "(same check, different rounds) have no length here",
+                            SMALL_SIZE, MUTED).next_to(mwpm_l, DOWN, buff=0.15, aligned_edge=LEFT)
+        self.play(LaggedStartMap(ShowCreation, chains, lag_ratio=0.15), FadeIn(mwpm_l),
+                  FadeIn(mwpm_note), run_time=2)
+        self.wait(0.8)
+
+        truth_l = caption(say("truth", RS["truth"]), CAPTION_SIZE, FG)
+        truth_l.next_to(mwpm_note, DOWN, buff=0.5, aligned_edge=LEFT)
+        self.play(FadeIn(truth_l, scale=1.2), run_time=0.6)
+        ok = lambda pred: "right" if pred == RS["truth"] else "wrong"
+        mark_x = max(gru_l.get_right()[0], mwpm_l.get_right()[0]) + 0.5
+        g_mark = caption(f"GRU: {ok(RS['gru_pred'])}", CAPTION_SIZE, FG).next_to(gru_l, RIGHT)
+        m_mark = caption(f"MWPM: {ok(RS['mwpm_pred'])}", CAPTION_SIZE, FG).next_to(mwpm_l, RIGHT)
+        for m in (g_mark, m_mark):
+            m.set_x(mark_x + m.get_width() / 2)
+        self.play(FadeIn(g_mark), FadeIn(m_mark), run_time=0.6)
+        self.wait(1.2)
+
+        # optional beat: gradient attribution
+        attr = RS["attribution"]["per_detector"]
+        top = sorted(attr, key=lambda i: -abs(attr[i]))[:5]
+        o, ex, _ = (a.get_center() for a in lat.anchors)
+        rr = 0.75 * np.linalg.norm(ex - o)
+        rings = VGroup(*(Circle(radius=rr).move_to(lat.detector_point(int(i)))
+                         .set_stroke(FG, 4) for i in top))
+        a_cap = caption("gradient attribution (integrated gradients):\n"
+                        "the 5 detectors that most moved the GRU's logit", SMALL_SIZE, FG)
+        a_cap.next_to(truth_l, DOWN, buff=0.6, aligned_edge=LEFT)
+        self.play(FadeOut(chains), LaggedStartMap(ShowCreation, rings, lag_ratio=0.2),
+                  FadeIn(a_cap), run_time=1.5)
+        self.wait(1.5)
+
+        close = caption("This is one shot. The headline numbers come from the held-out test set.",
+                        CAPTION_SIZE, FG).to_edge(DOWN, buff=0.35)
+        self.play(FadeOut(ev_cap), FadeIn(close), run_time=0.8)
+        self.wait(2)
+
+
+# ---- Results: swap RESULTS for the held-out file when those numbers exist ----------------
+RESULTS = DATA / "results_eval_preliminary.csv"
+
+
+def load_results(path):
+    import csv
+    if not path.exists():
+        return []
+    num = lambda v: float(v) if v not in ("", None) else None
+    return [{**r, "ler": num(r["ler"]), "ci_low": num(r["ci_low"]), "ci_high": num(r["ci_high"]),
+             "ratio_to_mwpm": num(r["ratio_to_mwpm"])} for r in csv.DictReader(open(path))]
+
+
+class Results(Scene):
+    def construct(self):
+        rows = load_results(RESULTS)
+        title = hud_text(f"Logical error rate per shot, d = {D}, p = {VIZ['meta']['p']}", TITLE_SIZE)
+        title.to_corner(UL)
+        if not rows:
+            card = VGroup(RoundedRectangle(width=6, height=2, corner_radius=0.2).set_stroke(MUTED, 2),
+                          caption("RESULTS PENDING", TITLE_SIZE, MUTED))
+            self.play(FadeIn(title), FadeIn(card))
+            self.wait(3)
+            return
+        label = hud_text(rows[0]["block_label"], CAPTION_SIZE, EVENT).next_to(title, DOWN, aligned_edge=LEFT)
+        mwpm = next(r for r in rows if r["kind"] == "mwpm")
+
+        bar_w, bar_h, gap = 7.0, 0.55, 1.15
+        x0 = -2.6
+        top = max(r["ci_high"] or r["ler"] for r in rows) * 1.15
+        to_x = lambda v: x0 + bar_w * v / top
+        bars, extras = VGroup(), VGroup()
+        for k, r in enumerate(rows):
+            y = 1.0 - k * gap
+            color = MWPM if r["kind"] == "mwpm" else L1
+            bar = Rectangle(width=to_x(r["ler"]) - x0, height=bar_h).set_stroke(width=0)
+            bar.set_fill(color, 0.85).move_to([x0, y, 0], aligned_edge=LEFT)
+            name = r["label"] if r["kind"] == "mwpm" else f"{r['label']} · {r['model'].replace('xu', ' × ')} GRU"
+            name_m = caption(name, CAPTION_SIZE).next_to(bar, LEFT, buff=0.3)
+            val = caption(f"{r['ler']:.6f}".rstrip("0"), SMALL_SIZE).next_to(bar, RIGHT, buff=0.3)
+            row = VGroup(bar, name_m, val)
+            if r["ci_low"] is not None:
+                ci = Line([to_x(r["ci_low"]), y, 0], [to_x(r["ci_high"]), y, 0]).set_stroke(FG, 3)
+                row.add(ci, *(Line([x, y - 0.15, 0], [x, y + 0.15, 0]).set_stroke(FG, 3)
+                              for x in (to_x(r["ci_low"]), to_x(r["ci_high"]))))
+            if r["kind"] == "gru":
+                ratio = caption(f"{r['ratio_to_mwpm']:.3f} × MWPM", CAPTION_SIZE, FG)
+                ratio.move_to([to_x(top) + 1.45, y, 0])
+                extras.add(ratio)
+                if r["mcnemar_b"]:
+                    mc = caption(f"paired on the same shots: GRU right & MWPM wrong b = {int(r['mcnemar_b']):,}, "
+                                 f"reverse c = {int(r['mcnemar_c']):,}; McNemar p = {r['mcnemar_p']}",
+                                 SMALL_SIZE, MUTED)
+                    mc.next_to(bar, DOWN, buff=0.1).align_to([x0, 0, 0], LEFT)
+                    extras.add(mc)
+            bars.add(row)
+        ref = DashedLine([to_x(mwpm["ler"]), 1.0 + bar_h, 0],
+                         [to_x(mwpm["ler"]), 1.0 - (len(rows) - 1) * gap - bar_h, 0],
+                         dash_length=0.12).set_stroke(MWPM, MWPM_WIDTH / 2)
+        axis = Line([x0, -2.2, 0], [to_x(top), -2.2, 0]).set_stroke(MUTED, 1.5)
+        ticks = VGroup()
+        step = 0.0005
+        for v in np.arange(0, top, step):
+            if round(v / step) % 2 == 0:
+                ticks.add(VGroup(Line([to_x(v), -2.2, 0], [to_x(v), -2.3, 0]).set_stroke(MUTED, 1.5),
+                                 caption(f"{v:g}", SMALL_SIZE, MUTED).move_to([to_x(v), -2.55, 0])))
+        axis_lbl = caption("logical error rate (errors per shot)", SMALL_SIZE, MUTED)
+        axis_lbl.next_to(axis, DOWN, buff=0.6)
+        notes = [f"{rows[0]['source']} · {rows[0]['block']} block"]
+        if all(r["ci_low"] is None for r in rows):
+            notes.append("no confidence intervals: the runs CSV has no error counts")
+        foot = caption(" · ".join(notes), SMALL_SIZE, MUTED).to_corner(DR)
+
+        self.play(FadeIn(title), FadeIn(label), run_time=0.8)
+        self.play(ShowCreation(axis), FadeIn(ticks), FadeIn(axis_lbl), run_time=0.6)
+        for row in bars:
+            self.play(GrowFromEdge(row[0], LEFT), FadeIn(VGroup(*row[1:])), run_time=0.7)
+        self.play(ShowCreation(ref), run_time=0.6)
+        self.play(LaggedStartMap(FadeIn, extras, lag_ratio=0.3), FadeIn(foot), run_time=1.5)
+        self.wait(3)

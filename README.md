@@ -15,7 +15,9 @@ System dependencies:
 - FFmpeg
 - Pango (`brew install pango pkg-config` / `apt install libpango1.0-dev`)
 - LaTeX with `dvisvgm` (macOS: `brew install --cask mactex-no-gui`). `custom_config.yml` uses the `basic` TeX template, so a small TeX install is enough.
-- [Inter](https://rsms.me/inter/) font (SIL Open Font License): `brew install --cask font-inter`, or download it from the Inter site. Without it, text falls back to the system sans font.
+- CMU Serif font (Computer Modern Unicode, SIL Open Font License), so captions match the LaTeX math. Without it, text falls back to the system serif font.
+  - macOS with MacTeX: `cp "$(kpsewhich -var-value TEXMFDIST)"/fonts/opentype/public/cm-unicode/*.otf ~/Library/Fonts/`
+  - Debian/Ubuntu: `apt install fonts-cmu`
 
 Run scenes from the repo root so `custom_config.yml` is picked up:
 

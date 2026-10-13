@@ -1,10 +1,10 @@
 """Neural-network pieces: input vectors, recurrent cells, readout."""
 import numpy as np
 from manimlib import (DOWN, LEFT, RIGHT, UP, AnimationGroup, Arrow, DecimalNumber, Line,
-                      Rectangle, RoundedRectangle, ShowPassingFlash, Square, Tex, Text,
+                      Rectangle, interpolate_color, RoundedRectangle, ShowPassingFlash, Square, Tex, Text,
                       ValueTracker, VGroup)
 
-from .style import BG, EVENT, FAINT, FG, FONT, MUTED
+from .style import BG, EVENT, FAINT, FG, FONT, MUTED, STATE_NEG, STATE_POS
 
 
 class DetectorVector(VGroup):
@@ -56,6 +56,25 @@ class GRUCell(VGroup):
         values = rng.uniform(0.1, 1.0, len(self.state)) if values is None else values
         return AnimationGroup(*(sq.animate.set_fill(self.layer_color, float(v))
                                 for sq, v in zip(self.state, values)), **kwargs)
+
+
+def diverging_color(v, vmax=1.0):
+    """BG at 0, STATE_POS at +vmax, STATE_NEG at -vmax."""
+    a = float(np.clip(v / vmax, -1, 1))
+    return interpolate_color(BG, STATE_POS if a >= 0 else STATE_NEG, abs(a))
+
+
+class StateHeatmap(VGroup):
+    """A hidden-state vector reshaped to a grid, on a fixed diverging scale."""
+
+    def __init__(self, values, shape=(14, 20), cell=0.045, vmax=1.0, **kwargs):
+        super().__init__(**kwargs)
+        grid = np.asarray(values, dtype=float).reshape(shape)
+        for i, row in enumerate(grid):
+            for j, v in enumerate(row):
+                sq = Square(cell).set_stroke(width=0).set_fill(diverging_color(v, vmax), 1)
+                self.add(sq.move_to([j * cell, -i * cell, 0]))
+        self.center()
 
 
 class HeadBox(VGroup):

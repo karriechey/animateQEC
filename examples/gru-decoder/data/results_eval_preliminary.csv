@@ -1,0 +1,4 @@
+label,kind,model,block,n_shots,n_errors,ler,ci_low,ci_high,ratio_to_mwpm,mcnemar_b,mcnemar_c,mcnemar_p,block_label,source
+MWPM,mwpm,pymatching,eval,,,0.002267,,,1.0,,,,"preliminary · eval block, not the held-out test set",GRU_all_runs_2026-10-01.csv
+f2280,gru,2xu280,eval,,,0.002207,,,0.973,2538,2429,0.13,"preliminary · eval block, not the held-out test set",GRU_all_runs_2026-10-01.csv
+f3280,gru,3xu280,eval,,,0.001507,,,0.665,2790,1421,2.0e-100,"preliminary · eval block, not the held-out test set",GRU_all_runs_2026-10-01.csv
