@@ -11,4 +11,4 @@ camera:
 tex:
   template: "basic"
 text:
-  font: "Helvetica Neue"
+  font: "Inter, sans-serif"
