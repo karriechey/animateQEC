@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from animateqec import *
+from animateqec import sound
 
 DATA = Path(__file__).parent / "data"
 VIZ = load_viz(DATA / "viz_data.json")
@@ -41,9 +42,11 @@ def stack_slices():
     """One faint lattice per round, with that round's events, shifted along OUT."""
     slices = Group()
     for t in STEPS:
-        lat = SurfaceCodeLattice(VIZ, height=LAT_H, plaquette_opacity=0.05, show_ancillas=False)
-        lat.plaquettes.set_stroke(width=1, opacity=0.18)
-        lat.data_dots.set_opacity(0.12)
+        lat = SurfaceCodeLattice(VIZ, height=LAT_H, show_ancillas=False)
+        lat.plaquettes.set_fill(opacity=0.04)
+        for e in lat.edges:  # faint neon, so ten stacked slices stay readable
+            e.set_stroke(opacity=float(e.get_stroke_opacity()) * 0.3)
+        lat.data_dots.set_opacity(0.15)
         glows = lat.event_glows(events(t))
         s = Group(lat, glows).shift(OUT * STACK_DZ * t)
         s.lat, s.glows = lat, glows
@@ -108,13 +111,29 @@ class SyndromeHistory(Scene):
         rows = [
             (Square(s).set_fill(Z_CHECK, 0.6).set_stroke(Z_CHECK, 1.5), "Z check"),
             (Square(s).set_fill(X_CHECK, 0.6).set_stroke(X_CHECK, 1.5), "X check"),
-            (VGroup(Dot(radius=0.2, fill_color=EVENT, fill_opacity=0.22),
-                    Dot(radius=0.085, fill_color=EVENT)), "detector fired"),
+            (Group(GlowDot(radius=0.22, color=EVENT_GLOW, glow_factor=2.2),
+                   Dot(radius=0.05, fill_color=EVENT_CORE)), "detector fired"),
         ]
-        g = VGroup(*(VGroup(icon, caption(text, CAPTION_SIZE)).arrange(RIGHT, buff=0.25)
-                     for icon, text in rows))
+        g = Group(*(Group(icon, caption(text, CAPTION_SIZE)).arrange(RIGHT, buff=0.25)
+                    for icon, text in rows))
         g.arrange(DOWN, aligned_edge=LEFT, buff=0.3)
         return g.next_to(lat, RIGHT, buff=0.8).align_to(lat, UP)
+
+
+class SyndromeStackOnly(Scene):
+    """Opener: the 3D syndrome history of one shot; ends on FlattenToVectors' first frame."""
+
+    def construct(self):
+        slices = stack_slices()
+        set_stack_view(self.frame, STACK_THETA[0])
+        title = hud_text(f"A distance-{D} surface code: {len(STEPS)} rounds of one shot", TITLE_SIZE)
+        title.to_corner(UL)
+        sub = hud_text("each slice is one round; dots are detectors that fired; time runs upward",
+                       CAPTION_SIZE, MUTED).next_to(title, DOWN, aligned_edge=LEFT)
+        self.play(LaggedStartMap(FadeIn, slices, lag_ratio=0.1), FadeIn(title), FadeIn(sub), run_time=2)
+        self.play(self.frame.animate.increment_theta((STACK_THETA[1] - STACK_THETA[0]) * DEGREES),
+                  run_time=5, rate_func=linear)
+        self.play(FadeOut(title), FadeOut(sub), run_time=0.8)
 
 
 # ---- shared layout of the input row and the GRU grid ---------------------------------
@@ -195,6 +214,7 @@ class FlattenToVectors(Scene):
 
 class StackedGRU(Scene):
     N_LAYERS = 2
+    DEPTH_NOTE = None
 
     def construct(self):
         self.rng = np.random.default_rng(0)
@@ -220,6 +240,9 @@ class StackedGRU(Scene):
             if l == 1:
                 beat = hud_text("Layer 2 never sees the detectors, only layer 1's running summary",
                                 CAPTION_SIZE, L2)
+                if self.DEPTH_NOTE:
+                    beat = VGroup(beat, hud_text(self.DEPTH_NOTE, CAPTION_SIZE, L2))
+                    beat.arrange(DOWN, aligned_edge=LEFT, buff=0.12)
                 eq = VGroup(eq, beat).arrange(DOWN, aligned_edge=LEFT, buff=0.2)
             self.hud.add(eq)
             self.hud.arrange(DOWN, aligned_edge=LEFT, buff=0.25).to_corner(UL)
@@ -340,6 +363,7 @@ class StackedGRU(Scene):
 
 class StackedGRU3(StackedGRU):
     N_LAYERS = 3
+    DEPTH_NOTE = f"more nonlinear depth per round, same width (u{UNITS})"
 
 
 OP_NAMES = {"R": "reset", "H": "Hadamard on X-type measure qubits", "CX": "CNOT layer",
@@ -410,9 +434,38 @@ def rs_events(t):
     return RS["events_by_round"].get(str(t), [])
 
 
+CHORD = [220.0, 261.63, 329.63, 493.88]  # A minor add9
+
+
+def det_pitch(xy):
+    """Lattice (x, y) onto two octaves of the pentatonic scale: low at bottom-left."""
+    from animateqec.sound import pentatonic
+    return pentatonic(round((xy[0] + (2 * D - xy[1])) / 4))
+
+
+def start_drift(frame, zoom=0.002, pan=0.004):
+    """Very slow push-in and pan; stop_drift returns the frame to its default."""
+    frame.add_updater(lambda f, dt: f.set_height(f.get_height() * (1 - zoom * dt)).shift(pan * dt * LEFT))
+
+
+def stop_drift(frame):
+    frame.clear_updaters()
+    return frame.animate.to_default_state()
+
+
 class RealShot(Scene):
     def construct(self):
+        self.cues = sound.CueSheet(self)
+        # camera push-in -> slight swell of the bed (dB), sampled every frame
+        self.cues.track("swell", lambda: 60 * max(0.0, 1 - self.frame.get_height() / FRAME_HEIGHT))
         n_layers = len(RS["hidden"])
+        # tick velocity follows the number of fired detectors at each step
+        n_fired = np.array([len(rs_events(t)) for t in STEPS])
+        self.tick_vel = 0.3 + 0.7 * n_fired / max(n_fired.max(), 1)
+        # chord brightness follows the real mean |h| over all layers, min-max scaled over the steps
+        mean_h = np.array([np.mean([np.abs(RS["hidden"][l][k]).mean() for l in range(n_layers)])
+                           for k in range(len(STEPS))])
+        bright = (mean_h - mean_h.min()) / max(np.ptp(mean_h), 1e-9)
         title = hud_text("One real shot, behind the scenes", TITLE_SIZE).to_corner(UL)
         assert not RS_META["held_out_test_set"] and RS["mwpm_pred"] != RS["truth"]
         tag = hud_text(f"shot #{RS['pool_shot']} · {RS['block']} block (not the held-out test set) · "
@@ -427,16 +480,22 @@ class RealShot(Scene):
         counter = VGroup(Tex("t =", font_size=40), Integer(0, font_size=40)).arrange(RIGHT, buff=0.15)
         counter.fix_in_frame().next_to(lat, RIGHT, buff=0.8).align_to(lat, UP)
         self.play(FadeIn(lat), FadeIn(counter), run_time=1)
+        start_drift(self.frame)
+        beat0 = self.time
         for t in STEPS:
-            glows = lat.event_glows(rs_events(t))
+            glows = lat.event_glows(rs_events(t), glow=True)
             self.play(counter[1].animate.set_value(t), run_time=0.15)
             if len(glows):
-                self.play(LaggedStartMap(GrowFromCenter, glows, lag_ratio=0.1), run_time=0.4)
+                grow = LaggedStart(*(fire(g) for g in glows), lag_ratio=0.4, run_time=0.45)
+                self.cues.group(grow, [dict(kind="blip", freq=det_pitch(xy), follow=g)
+                                       for xy, g in zip(glows.xys, glows)])
+                self.play(grow)
                 self.wait(0.2)
                 self.play(FadeOut(glows), run_time=0.2)
             else:
                 self.wait(0.3)
-        self.play(FadeOut(lat), FadeOut(counter), FadeOut(picked), run_time=0.6)
+        self.play(FadeOut(lat), FadeOut(counter), FadeOut(picked), stop_drift(self.frame), run_time=0.6)
+        self.density_level(beat0, self.time)
 
         # 2. the real hidden states, step by step
         vecs = VGroup()
@@ -469,18 +528,26 @@ class RealShot(Scene):
         for k in range(len(STEPS)):
             anims = []
             for l in range(n_layers):
-                a = [GrowArrow(ups[l][k]), FadeIn(cells[l][k])]
+                a = [GrowArrow(ups[l][k]), FadeIn(cells[l][k]),
+                     particles_along(ups[l][k], color=FG if l == 0 else LAYER_COLORS[l - 1], n=2, radius=0.26)]
                 if k:
                     a.append(ShowCreation(sides[l][k - 1]))
                 anims.append(AnimationGroup(*a))
-            self.play(Indicate(vecs[k].cells, color=EVENT, scale_factor=1.05),
-                      LaggedStart(*anims, lag_ratio=0.45), run_time=0.9)
+            stack = LaggedStart(*anims, lag_ratio=0.45, run_time=0.9)
+            self.cues.at("tick", velocity=self.tick_vel[k])
+            self.cues.point("bed_level", -6)
+            self.cues.point("bed_bright", 0.15 + 0.75 * bright[k])  # bed cutoff follows mean |h|
+            self.cues.group(stack, [None] * (n_layers - 1)
+                            + [dict(kind="soft_chord", freqs=CHORD, dur=0.9, brightness=float(bright[k]),
+                                    follow=cells[-1][k][0])])
+            self.play(Indicate(vecs[k].cells, color=EVENT, scale_factor=1.05, run_time=0.9), stack)
         last = cells[-1][-1]
         head = HeadBox().scale(0.8).next_to(last, UP, buff=0.4)
         head_arrow = flow_arrow(last.get_top(), head.get_bottom(), LAYER_COLORS[n_layers - 1])
         gauge = PFlipGauge(width=1.8).scale(0.8).next_to(head, UP, buff=0.25)
         gauge.to_edge(RIGHT, buff=0.3)
-        self.play(GrowArrow(head_arrow), FadeIn(head), FadeIn(gauge), run_time=0.6)
+        self.play(GrowArrow(head_arrow), particles_along(head_arrow, color=LAYER_COLORS[n_layers - 1]),
+                  FadeIn(head), FadeIn(gauge), run_time=0.6)
         self.play(gauge.fill_to(RS["p_flip"], run_time=1.2))
         self.wait(1)
         network = VGroup(vecs, labels, *cells, *ups, *sides, head, head_arrow, scale, note)
@@ -491,6 +558,17 @@ class RealShot(Scene):
 
         # 4. the verdict on the lattice
         self.verdict()
+        self.cues.point("bed_level", -10)
+        Path("videos").mkdir(exist_ok=True)
+        self.cues.write(Path("videos") / "RealShot.cues.json")
+
+    def density_level(self, t0, t1, sigma=0.5, lo=-16, hi=-4):
+        """Bed level over [t0, t1] from the smoothed density of the blips cued in it."""
+        ts = np.array([c["t"] for c in self.cues.cues if c["kind"] == "blip" and t0 <= c["t"] <= t1])
+        grid = np.arange(t0, t1, 0.05)
+        dens = np.exp(-0.5 * ((grid[:, None] - ts[None]) / sigma) ** 2).sum(1) if len(ts) else 0 * grid
+        dens = dens / max(dens.max(), 1e-9)
+        self.cues.curves.setdefault("bed_level", []).extend(zip(grid, lo + (hi - lo) * dens))
 
     def state_scale(self):
         n = 21
@@ -541,7 +619,16 @@ class RealShot(Scene):
         side.next_to(main_frame, RIGHT, buff=0.6).align_to(main_frame, UP)
         self.play(FadeIn(main_frame), FadeIn(head), FadeIn(main_cloud, lag_ratio=0.002),
                   FadeIn(side), run_time=1.5)
+        # bed builds as the layer-3 path closes on the flip cluster (distance in this PCA plane)
+        path = np.array(pcs[-1]["trajectories"][str(RS["pool_shot"])])
+        cloud = np.array(pcs[-1]["cloud_final"])
+        target = cloud[np.array(pcs[-1]["cloud_truth"]) == RS["truth"]].mean(0)
+        dist = np.linalg.norm(path - target, axis=1)
+        close = np.clip((dist.max() - dist) / max(np.ptp(dist), 1e-9), 0, 1)
+        self.build_db = -10 + 10 * close
         for k in range(len(main_steps)):
+            self.cues.at("tick", velocity=self.tick_vel[k], follow=main_steps[k])
+            self.cues.point("bed_level", self.build_db[k])
             anims = [GrowFromCenter(main_steps[k])]
             if k:
                 anims.append(ShowCreation(main_segs[k - 1]))
@@ -565,18 +652,20 @@ class RealShot(Scene):
                        SMALL_SIZE, MUTED).next_to(small, DOWN, buff=0.2, aligned_edge=LEFT)
         self.play(FadeIn(small), FadeIn(weak), run_time=1)
         self.wait(1.5)
-        self.play(*(FadeOut(m) for m in self.mobjects if not getattr(m, "fixed_in_frame", False)
-                    or m in (head, legend, fit, end_cap, weak)), run_time=0.8)
+        self.play(*(FadeOut(m) for m in self.mobjects if m is not self.cues.probe and (
+                    not getattr(m, "fixed_in_frame", False) or m in (head, legend, fit, end_cap, weak))),
+                  run_time=0.8)
         self.play(FadeOut(VGroup(head, side, end_cap, weak, lab)), run_time=0.1)
 
     def verdict(self):
         lat = SurfaceCodeLattice(VIZ, height=LAT_H).to_edge(LEFT, buff=0.8).shift(DOWN * 0.3)
         all_events = [i for t in STEPS for i in rs_events(t)]
-        glows = lat.event_glows(all_events)
+        glows = lat.event_glows(all_events, glow=True)
         ev_cap = caption(f"all {RS['n_events']} detection events; rings mark a check\n"
                          "that fired in more than one round", SMALL_SIZE, MUTED)
         ev_cap.next_to(lat, DOWN, buff=0.15)
         self.play(FadeIn(lat), FadeIn(glows), FadeIn(ev_cap), run_time=1)
+        start_drift(self.frame, zoom=0.0015, pan=0.003)
 
         col_x = lat.get_right()[0] + 0.8
         say = lambda name, flip: f"{name}: {'flip' if flip else 'no flip'}"
@@ -604,7 +693,20 @@ class RealShot(Scene):
         m_mark = caption(f"MWPM: {ok(RS['mwpm_pred'])}", CAPTION_SIZE, FG).next_to(mwpm_l, RIGHT)
         for m in (g_mark, m_mark):
             m.set_x(mark_x + m.get_width() / 2)
-        self.play(FadeIn(g_mark), FadeIn(m_mark), run_time=0.6)
+        if RS["mwpm_pred"] != RS["truth"]:
+            self.cues.at("dissonant", velocity=0.8, follow=m_mark, dur=0.7)
+        self.play(FadeIn(m_mark), run_time=0.6)
+        # hold the build, drop to near-silence 0.5 s before the GRU's answer, then resolve
+        pause = 1.1
+        self.cues.point("bed_level", self.build_db[-1])
+        self.cues.point("bed_level", self.build_db[-1], offset=pause - 0.9)
+        self.cues.point("bed_level", sound.BED_FLOOR_DB, offset=pause - 0.5)
+        self.wait(pause)
+        self.cues.point("bed_level", sound.BED_FLOOR_DB)
+        if RS["gru_pred"] == RS["truth"]:
+            self.cues.at("resolve", velocity=2.0, follow=g_mark)
+        self.cues.point("bed_level", -16, offset=1.0)
+        self.play(FadeIn(g_mark), run_time=0.6)
         self.wait(1.2)
 
         # optional beat: gradient attribution
@@ -707,3 +809,249 @@ class Results(Scene):
         self.play(ShowCreation(ref), run_time=0.6)
         self.play(LaggedStartMap(FadeIn, extras, lag_ratio=0.3), FadeIn(foot), run_time=1.5)
         self.wait(3)
+
+
+# ---- model config (scripts/export_model_config.py on grace1) ----------------------------
+MODEL_DIR = DATA
+
+
+def load_model_cfg(run):
+    path = MODEL_DIR / f"model_{run}.json"
+    return load_viz(path) if path.exists() else None
+
+
+def pending_card(text):
+    return VGroup(RoundedRectangle(width=7, height=2, corner_radius=0.2).set_stroke(MUTED, 2),
+                  caption(text, TITLE_SIZE, MUTED))
+
+
+def gru_params(n_in, u):
+    """Keras GRU, reset_after=False: three gates, each W (n_in x u), U (u x u), b (u)."""
+    return 3 * (u * (n_in + u) + u)
+
+
+def architecture(cfg):
+    """Folded network diagram built from the exported model config."""
+    grus = [l for l in cfg["layers"] if l["class"] == "GRU"]
+    heads = [l for l in cfg["layers"] if l["class"] == "Dense"]
+    assert len(heads) == 1 and heads[0]["units"] == 1, "expected one Dense(1) head"
+    head = heads[0]
+    n_t, n_in = cfg["input_shape"][1:]
+    shape = lambda l: "(" + ", ".join(str(v) for v in l["output_shape"][1:]) + ")"
+    cols = [dict(name="input", size=n_in, color=FG, label=r"x_t", lines=[f"{n_in} detector slots",
+                                                                        f"in ({n_t}, {n_in})"])]
+    for i, g in enumerate(grus):
+        cols.append(dict(name=f"GRU {i + 1}", size=g["units"], color=LAYER_COLORS[i], label=None,
+                         lines=[f"{g['units']} units", f"out {shape(g)}", f"{g['params']:,} params"],
+                         layer=g))
+    cols.append(dict(name="head", size=head["units"], color=FG, label=None,
+                     lines=[f"Dense, {head['activation']}", f"out {shape(head)}", f"{head['params']:,} params"]))
+    cols.append(dict(name=r"P(flip)", size=1, color=EVENT, label=None, lines=["sigmoid of the logit"]))
+
+    xs = np.linspace(-5.4, 5.4, len(cols))
+    y0, dy, rad = 0.55, 0.42, 0.15
+    columns, conns, loops, texts = VGroup(), VGroup(), VGroup(), VGroup()
+    for c, x in zip(cols, xs):
+        n_draw = min(6, c["size"])
+        ys = (np.arange(n_draw) - (n_draw - 1) / 2) * -dy
+        if c["size"] > 6:
+            ys = np.concatenate([ys[:3] + dy / 2, ys[3:] - dy / 2])
+        dots = VGroup(*(Circle(radius=rad).set_stroke(c["color"], 2).set_fill(c["color"], 0.25)
+                        .move_to([x, y0 + yy, 0]) for yy in ys))
+        col = VGroup(dots)
+        if c["size"] > 6:
+            col.add(Tex(r"\vdots", font_size=30, color=c["color"]).move_to([x, y0, 0]))
+        col.dots = dots
+        columns.add(col)
+        name = caption(c["name"], CAPTION_SIZE, c["color"])
+        name.move_to([x, y0 - 1.75, 0])
+        info = VGroup(*(caption(t, SMALL_SIZE, MUTED) for t in c["lines"])).arrange(DOWN, buff=0.08)
+        info.next_to(name, DOWN, buff=0.15)
+        texts.add(VGroup(name, info))
+    for a, b in zip(columns[:-1], columns[1:]):
+        conns.add(VGroup(*(Line(p.get_center(), q.get_center(), buff=rad).set_stroke(MUTED, 1, 0.22)
+                           for p in a.dots for q in b.dots)))
+    for i, (c, col) in enumerate(zip(cols, columns)):
+        if "layer" not in c:
+            continue
+        top = col.get_top()
+        arc = Arc(start_angle=-PI / 6, angle=4 * PI / 3, radius=0.32).move_to(top + UP * 0.38)
+        arc.set_stroke(c["color"], 2.5)
+        arc.add_tip(width=0.14, length=0.14)
+        arc.get_tips().set_color(c["color"])
+        lbl = Tex(rf"h^{{{i}}}_{{t-1}}", font_size=26, color=c["color"]).next_to(arc, UP, buff=0.05)
+        loop = VGroup(arc, lbl)
+        loop.pivot = top + UP * 0.38
+        loops.add(loop)
+    inp_info = texts[0][1]
+    brace = Brace(inp_info, DOWN, buff=0.12).set_color(MUTED)
+    same = caption(f"same weights, applied for t = 0…{n_t - 1}", SMALL_SIZE, FG).next_to(brace, DOWN, buff=0.1)
+    best = cfg.get("best") or {}
+    title = caption(f"{cfg['run']}: {len(grus)}-layer stacked GRU decoder (folded view)", TITLE_SIZE)
+    title.to_corner(UL)
+    foot = caption(f"Keras GRU, reset_after = {grus[0]['reset_after']}, recurrent activation "
+                   f"{grus[0]['recurrent_activation']} · {cfg['total_params']:,} parameters in total · "
+                   f"checkpoint epoch {best.get('best_epoch', '?')}", SMALL_SIZE, MUTED).to_corner(DR)
+    return dict(columns=columns, conns=conns, loops=loops, texts=texts, brace=VGroup(brace, same),
+                title=title, foot=foot, centres=[col.get_center() for col in columns])
+
+
+class ArchitectureDiagram(Scene):
+    """Still diagram for slides: -s writes the PNG; the SVG goes to videos/<Scene>.svg."""
+    RUN = "f3280"
+
+    def construct(self):
+        cfg = load_model_cfg(self.RUN)
+        if cfg is None:
+            self.add(pending_card("MODEL CONFIG PENDING"))
+            return
+        a = architecture(cfg)
+        parts = [a["conns"], a["columns"], a["loops"], a["texts"], a["brace"], a["title"], a["foot"]]
+        self.add(*parts)
+        from animateqec.svg import to_svg
+        out = Path("videos")
+        out.mkdir(exist_ok=True)
+        to_svg(parts, out / f"{type(self).__name__}.svg", background=BG)
+
+
+class ArchitectureDiagram2(ArchitectureDiagram):
+    RUN = "f2280"
+
+
+class ArchitectureBuild(Scene):
+    """Animated diagram for the team cut: columns left to right, then one pass input to output."""
+    RUN = "f3280"
+
+    def construct(self):
+        cfg = load_model_cfg(self.RUN)
+        if cfg is None:
+            self.add(pending_card("MODEL CONFIG PENDING"))
+            self.wait(2)
+            return
+        a = architecture(cfg)
+        self.play(FadeIn(a["title"]), run_time=0.5)
+        for k, (col, txt) in enumerate(zip(a["columns"], a["texts"])):
+            anims = [FadeIn(col, lag_ratio=0.1), FadeIn(txt)]
+            if k:
+                anims.append(ShowCreation(a["conns"][k - 1], lag_ratio=0.01))
+            if k == 0:
+                anims.append(FadeIn(a["brace"]))
+            self.play(*anims, run_time=0.6)
+        self.play(*(FadeIn(l) for l in a["loops"]), FadeIn(a["foot"]), run_time=0.6)
+        path = VMobject().set_points_as_corners(a["centres"]).set_stroke(EVENT, 5)
+        self.play(ShowPassingFlash(path, time_width=0.35),
+                  *(Rotate(l[0], TAU, about_point=l.pivot) for l in a["loops"]),
+                  run_time=2.5, rate_func=linear)
+        self.wait(2.8)
+
+
+class GRUCellInside(Scene):
+    """One layer-1 cell at one step, with the real values from the RealShot trace."""
+    LAYER, STEP = 0, 4
+
+    def construct(self):
+        l, k = self.LAYER, self.STEP
+        h_prev = np.array(RS["hidden"][l][k - 1])
+        h = np.array(RS["hidden"][l][k])
+        z = np.array(RS["gates"][l]["z"][k])
+        r = np.array(RS["gates"][l]["r"][k])
+        ok = (1 - z) > 0.02
+        h_tilde = np.where(ok, (h - z * h_prev) / np.where(ok, 1 - z, 1), 0)
+        bits = step_bits(VIZ, {"events_by_round": RS["events_by_round"]}, k)
+        x = np.zeros(N_SLOTS)
+        x[bits.fired] = 1
+
+        title = hud_text("Inside one GRU cell", TITLE_SIZE).to_corner(UL)
+        sub = hud_text("Keras GRU with reset_after = False, as in our model", CAPTION_SIZE, MUTED)
+        sub.next_to(title, DOWN, aligned_edge=LEFT)
+        self.play(FadeIn(title), FadeIn(sub), run_time=0.8)
+
+        sx, sw = 3.1, 7.0
+        rows = [
+            (r"x_t", x, lambda v: EVENT if v else FAINT, None, f"input: {N_SLOTS} detector slots"),
+            (r"h_{t-1}", h_prev, diverging_color, None, f"previous state: {len(h)} units"),
+            (r"z_t = \sigma(x_t W_z + h_{t-1} U_z + b_z)", z, gate_color, None, "update gate"),
+            (r"r_t = \sigma(x_t W_r + h_{t-1} U_r + b_r)", r, gate_color, None, "reset gate"),
+            (r"\tilde h_t = \tanh\!\big(x_t W_h + (r_t \odot h_{t-1})\, U_h + b_h\big)", h_tilde,
+             diverging_color, ok, "candidate state"),
+            (r"h_t = z_t \odot h_{t-1} + (1 - z_t) \odot \tilde h_t", h, diverging_color, None,
+             "new state: z near 1 keeps the old value, z near 0 takes the candidate"),
+        ]
+        mobs = []
+        for i, (eq, vals, cfn, mask, note) in enumerate(rows):
+            y = 1.75 - i * 0.78
+            e = Tex(eq, font_size=30, color=FG).move_to([0, y, 0]).to_edge(LEFT, buff=0.5)
+            width = sw * len(vals) / len(h) if len(vals) < len(h) else sw
+            strip = StateStrip(vals, width=width, height=0.3, color_fn=cfn, mask=mask)
+            strip.move_to([sx - sw / 2 + width / 2, y, 0])
+            n = caption(note, SMALL_SIZE, MUTED).next_to(strip, DOWN, buff=0.06).align_to(strip, LEFT)
+            mobs.append((e, strip, n))
+
+        keys = VGroup(self.key(diverging_color, -1, 1, "state"), self.key(gate_color, 0, 1, "gate"))
+        keys.arrange(RIGHT, buff=0.6).to_corner(UR)
+        self.play(FadeIn(keys), *(FadeIn(m) for m in mobs[0] + mobs[1]), run_time=1.2)
+        self.wait(1)
+        src = {2: (0, 1), 3: (0, 1), 4: (0, 1, 3), 5: (1, 2, 4)}
+        for i in range(2, len(mobs)):
+            e, strip, n = mobs[i]
+            boxes = [SurroundingRectangle(mobs[j][1], buff=0.05).set_stroke(FG, 1.5) for j in src[i]]
+            self.play(*(ShowCreationThenFadeOut(b) for b in boxes), run_time=0.9)
+            self.play(Write(e), FadeIn(strip, shift=0.1 * DOWN), FadeIn(n), run_time=1.6)
+            self.wait(1.4)
+
+        real = hud_math(f"real values: layer {l + 1}, step $t = {k}$ of shot \\#{RS['pool_shot']}\\\\"
+                        r"candidate recovered from $h_t$, $z_t$, $h_{t-1}$ (hollow where $1 - z_t < 0.02$)",
+                        SMALL_SIZE, MUTED).to_corner(DL)
+        params = self.param_lines().to_corner(DR)
+        self.play(FadeIn(real), FadeIn(params), run_time=0.8)
+        self.wait(4)
+
+    def key(self, cfn, lo, hi, name):
+        bar = VGroup(*(Square(0.1).set_stroke(width=0).set_fill(cfn(v), 1)
+                       for v in np.linspace(lo, hi, 21))).arrange(RIGHT, buff=0)
+        lbl = VGroup(caption(name, SMALL_SIZE, MUTED), Tex(str(lo), font_size=22), bar,
+                     Tex(f"{hi:+d}" if lo < 0 else str(hi), font_size=22)).arrange(RIGHT, buff=0.1)
+        return lbl.fix_in_frame()
+
+    def param_lines(self):
+        lines = []
+        for run in ("f2280", "f3280"):
+            cfg = load_model_cfg(run)
+            if cfg is None:
+                lines.append(f"{run}: parameter counts pending (model config)")
+                continue
+            grus = [g for g in cfg["layers"] if g["class"] == "GRU"]
+            head = next(l for l in cfg["layers"] if l["class"] == "Dense")
+            for g in grus:
+                assert g["params"] == gru_params(g["input_shape"][-1], g["units"]), g["name"]
+            per = " + ".join(f"{g['params']:,}" for g in grus)
+            lines.append(f"{run}: {per} + head {head['params']:,} = {cfg['total_params']:,}")
+        txt = VGroup(hud_math(r"parameters per layer: $3\,(u\,(n_\mathrm{in} + u) + u)$", SMALL_SIZE, FG),
+                     *(caption(s, SMALL_SIZE, MUTED) for s in lines)).arrange(DOWN, aligned_edge=LEFT, buff=0.08)
+        return txt.fix_in_frame()
+
+
+class RealShotLook(Scene):
+    """Still of RealShot's setup at t = 2, in one lattice look, for choosing the look."""
+    LOOK = "A"
+
+    def construct(self):
+        self.add(vignette())
+        title = hud_text("One real shot, behind the scenes", TITLE_SIZE).to_corner(UL)
+        picked = hud_text("selected as a shot where MWPM fails", CAPTION_SIZE, MUTED)
+        picked.next_to(title, DOWN, aligned_edge=LEFT)
+        tag = hud_text(f"shot #{RS['pool_shot']} · {RS['block']} block (not the held-out test set) · "
+                       f"{RUN_LABEL}, epoch {RS_META['best']['best_epoch']}", SMALL_SIZE, MUTED).to_corner(DR)
+        lat = SurfaceCodeLattice(VIZ, height=LAT_H, look=self.LOOK).shift(DOWN * 0.3)
+        counter = VGroup(Tex("t =", font_size=40), Integer(2, font_size=40)).arrange(RIGHT, buff=0.15)
+        counter.fix_in_frame().next_to(lat, RIGHT, buff=0.8).align_to(lat, UP)
+        label = caption(f"look {self.LOOK}", TITLE_SIZE, FG).to_corner(UR)
+        self.add(lat, lat.event_glows(rs_events(2), glow=True), title, picked, tag, counter, label)
+
+
+class RealShotLookB(RealShotLook):
+    LOOK = "B"
+
+
+class RealShotLookC(RealShotLook):
+    LOOK = "C"

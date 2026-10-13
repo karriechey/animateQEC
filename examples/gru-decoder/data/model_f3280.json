@@ -1,0 +1,140 @@
+{
+ "run": "f3280",
+ "checkpoint": "gru_d9_p004_u280x280x280_fresh100000000_cos3e-5_wu3_gclip0.64_hard_seed0_ntr0_b10000.best.weights.h5",
+ "sha256": "ef9694d1ededb7823680372ad5887d5f70be175c4951528597d2e002594a16bb",
+ "best": {
+  "best_epoch": 148,
+  "val_ler": 0.001425,
+  "val_errors": 285,
+  "val_n": 200000,
+  "val_loss": 0.004245281219482422,
+  "selection": "min val_errors, tiebreak min val_loss"
+ },
+ "d": 9,
+ "rounds": 9,
+ "p": 0.004,
+ "tf_version": "2.15.1",
+ "input_shape": [
+  null,
+  10,
+  80
+ ],
+ "total_params": 1246001,
+ "output": "logit; P(flip) = logits_to_prob(logit) = sigmoid(logit), outside the model",
+ "layers": [
+  {
+   "name": "syndrome_sequence",
+   "class": "InputLayer",
+   "input_shape": [
+    null,
+    10,
+    80
+   ],
+   "output_shape": [
+    null,
+    10,
+    80
+   ],
+   "params": 0
+  },
+  {
+   "name": "gru",
+   "class": "GRU",
+   "input_shape": [
+    null,
+    10,
+    80
+   ],
+   "output_shape": [
+    null,
+    10,
+    280
+   ],
+   "params": 303240,
+   "units": 280,
+   "return_sequences": true,
+   "reset_after": false,
+   "activation": "tanh",
+   "recurrent_activation": "sigmoid",
+   "use_bias": true
+  },
+  {
+   "name": "gru_1",
+   "class": "GRU",
+   "input_shape": [
+    null,
+    10,
+    280
+   ],
+   "output_shape": [
+    null,
+    10,
+    280
+   ],
+   "params": 471240,
+   "units": 280,
+   "return_sequences": true,
+   "reset_after": false,
+   "activation": "tanh",
+   "recurrent_activation": "sigmoid",
+   "use_bias": true
+  },
+  {
+   "name": "gru_2",
+   "class": "GRU",
+   "input_shape": [
+    null,
+    10,
+    280
+   ],
+   "output_shape": [
+    null,
+    280
+   ],
+   "params": 471240,
+   "units": 280,
+   "return_sequences": false,
+   "reset_after": false,
+   "activation": "tanh",
+   "recurrent_activation": "sigmoid",
+   "use_bias": true
+  },
+  {
+   "name": "logit",
+   "class": "Dense",
+   "input_shape": [
+    null,
+    280
+   ],
+   "output_shape": [
+    null,
+    1
+   ],
+   "params": 281,
+   "units": 1,
+   "activation": "linear",
+   "use_bias": true
+  }
+ ],
+ "summary": [
+  "Model: \"gru_student\"",
+  "____________________________________________________________________________________________________",
+  " Layer (type)                                Output Shape                            Param #        ",
+  "====================================================================================================",
+  " syndrome_sequence (InputLayer)              [(None, 10, 80)]                        0              ",
+  "                                                                                                    ",
+  " gru (GRU)                                   (None, 10, 280)                         303240         ",
+  "                                                                                                    ",
+  " gru_1 (GRU)                                 (None, 10, 280)                         471240         ",
+  "                                                                                                    ",
+  " gru_2 (GRU)                                 (None, 280)                             471240         ",
+  "                                                                                                    ",
+  " logit (Dense)                               (None, 1)                               281            ",
+  "                                                                                                    ",
+  "====================================================================================================",
+  "Total params: 1246001 (4.75 MB)",
+  "Trainable params: 1246001 (4.75 MB)",
+  "Non-trainable params: 0 (0.00 Byte)",
+  "____________________________________________________________________________________________________"
+ ]
+}

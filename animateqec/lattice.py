@@ -2,15 +2,18 @@
 import numpy as np
 from collections import Counter
 
-from manimlib import Circle, DashedLine, Dot, Line, Polygon, VectorizedPoint, VGroup
+from manimlib import WHITE, Circle, UpdateFromAlphaFunc, interpolate_color, smooth, DashedLine, Dot, GlowDot, Group, Line, Polygon, VectorizedPoint, VGroup
 
-from .style import BASIS_COLOR, EVENT, FG, MWPM, MWPM_WIDTH
+from .style import (BASIS_COLOR, DATA_DOT, EVENT, EVENT_CORE, EVENT_GLOW, FG, LATTICE_LOOKS, MWPM,
+                    MWPM_WIDTH, PX, LATTICE_LOOK)
 
 
 class SurfaceCodeLattice(VGroup):
     """Plaquettes, data qubits and measure qubits, centred at the origin."""
 
-    def __init__(self, viz, height=6.0, plaquette_opacity=0.35, show_ancillas=True, **kwargs):
+    def __init__(self, viz, height=6.0, plaquette_opacity=0.35, show_ancillas=True, look=LATTICE_LOOK,
+                 **kwargs):
+        """look: a key of LATTICE_LOOKS (neon edges, low fills, small dots), or None for flat fills."""
         super().__init__(**kwargs)
         self.viz = viz
         data_xy = np.array([q["xy"] for q in viz["qubits"]["data"]])
@@ -21,27 +24,44 @@ class SurfaceCodeLattice(VGroup):
         # Stim's qubit spacing between data qubits is 2 coordinate units
         self.unit = 2 * self._scale
 
+        style = LATTICE_LOOKS[look] if look else None
         self.plaquettes = VGroup()
         self.plaquette_of = {}
+        self.edges = VGroup()
         for s in viz["stabilizers"]:
-            pts = self._polygon_points(s)
-            poly = Polygon(*pts)
-            poly.set_fill(BASIS_COLOR[s["basis"]], opacity=plaquette_opacity)
-            poly.set_stroke(BASIS_COLOR[s["basis"]], width=1.5, opacity=0.8)
+            color = BASIS_COLOR[s["basis"]]
+            poly = Polygon(*self._polygon_points(s))
+            if style:
+                poly.set_fill(color, opacity=style["fill"]).set_stroke(width=0)
+                # neon edge: the same outline stroked wide-and-faint up to a thin full-strength core
+                hot = interpolate_color(color, WHITE, style.get("core_white", 0))
+                layers = style["neon"]
+                self.edges.add(*(poly.copy().set_fill(opacity=0)
+                                 .set_stroke(hot if i == len(layers) - 1 else color, px * PX, op)
+                                 for i, (px, op) in enumerate(layers)))
+            else:
+                poly.set_fill(color, opacity=plaquette_opacity)
+                poly.set_stroke(color, width=1.5, opacity=0.8)
             self.plaquettes.add(poly)
             self.plaquette_of[s["ancilla"]] = poly
 
         r = 0.11 * self.unit
-        self.data_dots = VGroup(*(Dot(self._local(q["xy"]), radius=r, fill_color=FG)
-                                  for q in viz["qubits"]["data"]))
+        if style:
+            self.data_dots = VGroup(*(Dot(self._local(q["xy"]), radius=0.55 * r, fill_color=DATA_DOT)
+                                      for q in viz["qubits"]["data"]))
+            anc_r = 0.3 * r
+        else:
+            self.data_dots = VGroup(*(Dot(self._local(q["xy"]), radius=r, fill_color=FG)
+                                      for q in viz["qubits"]["data"]))
+            anc_r = 0.6 * r
         self.ancilla_dots = VGroup(*(
-            Dot(self._local(a["xy"]), radius=0.6 * r, fill_color=BASIS_COLOR[a["basis"]])
+            Dot(self._local(a["xy"]), radius=anc_r, fill_color=BASIS_COLOR[a["basis"]])
             for a in viz["qubits"]["ancilla"]))
         self.qubit_xy = {q["q"]: q["xy"] for q in viz["qubits"]["data"] + viz["qubits"]["ancilla"]}
         # hidden Stim-frame anchors at (0,0), (1,0), (0,1); they move with the group, so
         # to_point stays right after shifts, scales and rotations
         self.anchors = VGroup(*(VectorizedPoint(self._local(p)) for p in ((0, 0), (1, 0), (0, 1))))
-        self.add(self.plaquettes, self.data_dots, self.anchors)
+        self.add(self.plaquettes, self.edges, self.data_dots, self.anchors)
         if show_ancillas:
             self.add(self.ancilla_dots)
 
@@ -68,7 +88,7 @@ class SurfaceCodeLattice(VGroup):
         d = self.viz["detectors"][det_index]
         return self.to_point((d["x"], d["y"]))
 
-    def event_glows(self, det_indices, color=EVENT):
+    def event_glows(self, det_indices, color=EVENT, glow=True):
         """One halo + core dot per fired position, plus an outer ring per repeat.
 
         Detectors from different rounds can share an (x, y); each extra occurrence there
@@ -78,11 +98,17 @@ class SurfaceCodeLattice(VGroup):
         r = 0.32 * np.linalg.norm(ex - o)
         det = self.viz["detectors"]
         counts = Counter((det[i]["x"], det[i]["y"]) for i in det_indices)
-        glows = VGroup()
+        glows = Group() if glow else VGroup()
+        glows.xys = list(counts)
         for xy, n in counts.items():
             p = self.to_point(xy)
-            g = VGroup(Dot(p, radius=2.4 * r, fill_color=color, fill_opacity=0.22),
-                       Dot(p, radius=r, fill_color=color))
+            if glow:
+                core = 0.45 * r
+                g = Group(GlowDot(p, color=EVENT_GLOW, radius=3 * core * 2.2, glow_factor=2.2),
+                          Dot(p, radius=core, fill_color=EVENT_CORE))
+            else:
+                g = VGroup(Dot(p, radius=2.4 * r, fill_color=color, fill_opacity=0.22),
+                           Dot(p, radius=r, fill_color=color))
             for k in range(1, n):
                 g.add(Circle(radius=(1.2 + 0.45 * k) * r).move_to(p)
                       .set_stroke(color, width=2.5).set_fill(opacity=0))
@@ -157,3 +183,18 @@ def _convex_hull(pts):
         return h[:-1]
 
     return [np.array([*p, 0.0]) for p in half(pts) + half(pts[::-1])]
+
+
+def fire(glow, run_time=0.25, peak=1.6):
+    """A detection event firing: flash in at peak scale with the glow at full, settle to 1x."""
+    centre = glow.get_center()
+    halo = glow[0]
+
+    def update(g, alpha):
+        g.restore()
+        u = smooth(alpha)
+        g.scale(peak + (1 - peak) * u, about_point=centre)
+        halo.set_opacity(1.0 - 0.25 * u)
+
+    glow.save_state()
+    return UpdateFromAlphaFunc(glow, update, run_time=run_time)

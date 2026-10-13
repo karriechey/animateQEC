@@ -5,10 +5,12 @@ directories:
     output: "videos"
     vector_images: "examples/gru-decoder/data/svg"
 camera:
-  background_color: "#0f1419"
+  background_color: "#080b10"
   resolution: (1920, 1080)
   fps: 30
 tex:
   template: "basic"
 text:
   font: "CMU Serif, serif"
+file_writer:
+  saturation: 1.1

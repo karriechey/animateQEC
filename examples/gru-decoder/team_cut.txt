@@ -1,0 +1,13 @@
+# pad air
+file '../../videos/SyndromeStackOnly.mp4'
+# pad data
+file '../../videos/FlattenToVectors.mp4'
+# pad machine
+file '../../videos/ArchitectureBuild.mp4'
+file '../../videos/GRUCellInside.mp4'
+# pad depth
+file '../../videos/StackedGRU3.mp4'
+# pad tension
+file '../../videos/RealShot.mp4'
+# pad settle
+file '../../videos/Results.mp4'

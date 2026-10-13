@@ -1,6 +1,7 @@
 """Neural-network pieces: input vectors, recurrent cells, readout."""
 import numpy as np
-from manimlib import (DOWN, LEFT, RIGHT, UP, AnimationGroup, Arrow, DecimalNumber, Line,
+from manimlib import (DOWN, LEFT, RIGHT, UP, AnimationGroup, Arrow, DecimalNumber, GlowDot, Group, Line,
+                      UpdateFromAlphaFunc,
                       Rectangle, interpolate_color, RoundedRectangle, ShowPassingFlash, Square, Tex, Text,
                       ValueTracker, VGroup)
 
@@ -77,6 +78,27 @@ class StateHeatmap(VGroup):
         self.center()
 
 
+def gate_color(v):
+    """BG at 0, FG at 1, for gate values in [0, 1]."""
+    return interpolate_color(BG, FG, float(np.clip(v, 0, 1)))
+
+
+class StateStrip(VGroup):
+    """One row of thin cells, one per value; masked values drawn hollow."""
+
+    def __init__(self, values, width=7.0, height=0.28, color_fn=diverging_color, mask=None, **kwargs):
+        super().__init__(**kwargs)
+        w = width / len(values)
+        for k, v in enumerate(values):
+            c = Rectangle(width=w, height=height).move_to(RIGHT * k * w).set_stroke(width=0)
+            if mask is not None and not mask[k]:
+                c.set_fill(BG, 1).set_stroke(MUTED, 0.5, opacity=0.4)
+            else:
+                c.set_fill(color_fn(v), 1)
+            self.add(c)
+        self.center()
+
+
 class HeadBox(VGroup):
     def __init__(self, color=FG, **kwargs):
         super().__init__(**kwargs)
@@ -133,6 +155,23 @@ def pulse_along(a, b=None, color=FG, width=7, time_width=0.5, **kwargs):
         a, b = _ends(a, b)
     return ShowPassingFlash(Line(a, b).set_stroke(color, width), time_width=time_width,
                             **kwargs)
+
+
+def particles_along(a, b=None, color=FG, n=3, spread=0.35, radius=0.2, **kwargs):
+    """A few glowing particles flowing from a to b (or along an arrow), removed at the end."""
+    if b is None:
+        a, b = a.get_start(), a.get_end()
+    else:
+        a, b = _ends(a, b)
+    dots = Group(*(GlowDot(a, color=color, radius=radius, glow_factor=2.0) for _ in range(n)))
+
+    def update(group, alpha):
+        for i, dot in enumerate(group):
+            u = np.clip(alpha * (1 + spread * (n - 1)) - spread * i, 0, 1)
+            dot.move_to(a + (b - a) * u)
+            dot.set_opacity(float(np.sin(np.pi * u)))
+
+    return UpdateFromAlphaFunc(dots, update, remover=True, **kwargs)
 
 
 def caption(text, size=26, color=FG):
