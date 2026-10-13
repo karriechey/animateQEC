@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "animateQEC"
+version = "0.1.0"
+description = "3b1b-style animations of quantum error correction, from any Stim circuit"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "manimgl==1.7.2",
+    "stim",
+    "numpy",
+    "setuptools<81",
+    "audioop-lts; python_version >= '3.13'",
+]
+
+[project.optional-dependencies]
+matching = ["pymatching"]
+
+[tool.setuptools]
+packages = ["animateqec"]

@@ -1,0 +1,5 @@
+videos/
+__pycache__/
+*.mp4
+.venv/
+*.egg-info/
