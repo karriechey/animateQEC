@@ -1,6 +1,7 @@
 # animateQEC
 
 3b1b-style animations of quantum error correction, from any Stim circuit.
+https://www.youtube.com/watch?v=TJradS5Vd-U
 
 ## Install
 
