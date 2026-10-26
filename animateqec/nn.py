@@ -175,4 +175,4 @@ def particles_along(a, b=None, color=FG, n=3, spread=0.35, radius=0.2, **kwargs)
 
 
 def caption(text, size=26, color=FG):
-    return Text(text, font=FONT, font_size=size, color=color)
+    return Text(text, font=FONT, font_size=size, fill_color=color)  # Text ignores color=
